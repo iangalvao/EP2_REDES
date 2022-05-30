@@ -84,3 +84,5 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 else:
                     message = packPass(comm[1], comm[2])
                     s.sendall(bytes(message, encoding="ASCII"))
+            elif comm[0] == "bye":
+                break
