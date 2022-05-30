@@ -39,6 +39,10 @@ def packList():
     return "list"
 
 
+def packHall():
+    return "hall"
+
+
 def packOut():
     return "out_"
 
@@ -73,6 +77,11 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 message = packList()
                 message = str.encode(message)
                 s.sendall(message)
+                message = s.recv(1024)
+                print(message.decode('utf-8'))
+            elif comm[0] == "hall":
+                message = packHall()
+                s.sendall(bytes(message, encoding="ASCII"))
                 message = s.recv(1024)
                 print(message.decode('utf-8'))
             elif comm[0] == "out":

@@ -11,7 +11,7 @@ def handleNew(data, users, connectedUsers):
     unameLen = int(data[4:7])
     username = data[7:7+unameLen].decode('utf-8')
     password = data[7+unameLen:].decode('utf-8')
-    users[username] = password
+    users[username] = [password, 0, 0, 0]
     # send(newACK)
 
 
@@ -20,8 +20,8 @@ def handlePass(data, users, connectedUsers):
     oldPass = data[7:7+oldLen].decode('utf-8')
     newPass = data[7+oldLen:].decode('utf-8')
     username = connectedUsers[get_ident()]
-    if oldPass == users[username]:
-        users[username] = newPass
+    if oldPass == users[username][0]:
+        users[username][0] = newPass
     else:
         print(
             f"Password Change Attempt Failed. User:{username}, password:{oldPass}")
@@ -34,7 +34,7 @@ def handleLogin(data, users, connectedUsers):
     password = data[7+unameLen:].decode('utf-8')
     print(
         f"LOGIN username length:{unameLen}\nusername:{username}\npassword:{password}")
-    if users[username] == password:
+    if users[username][0] == password:
         print(f"user {username}: connected.")
         connectedUsers[get_ident()] = username
         # send(loginACK)
@@ -59,7 +59,11 @@ def handleList(data, connectedUsers, s):
 
 
 def handleHoF(data, users, s):
-    pass
+    message = createHoF(data, users)
+    message = str.encode(message)
+    if not message:
+        message = b"There are no users in the system."
+    s.sendall(message)
 
 
 def statusToStr(status):
@@ -67,6 +71,20 @@ def statusToStr(status):
         return "Connected"
     else:
         return "Disconnected"
+
+
+def createHoF(data, users):
+    message = "Users/Points\n"
+    for user, value in users.items():
+        message += user + "/"
+        message += historyToStr(value)
+        message += '\n'
+    return message
+
+
+def historyToStr(data):
+    pontos = 3 * data[1] + data[2]
+    return f"{pontos}"
 
 
 def createList(data, connectedUsers):
@@ -107,7 +125,6 @@ def handleTCPClient(conn, addr, users):
 
             elif comm == b"list":
                 handleList(data, connectedUsers, conn)
-
             elif comm == b"hall":
                 handleHoF(data, users, conn)
             elif comm == b"out_":
