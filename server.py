@@ -19,7 +19,11 @@ def handlePass(data, users, connectedUsers):
     oldLen = int(data[4:7])
     oldPass = data[7:7+oldLen].decode('utf-8')
     newPass = data[7+oldLen:].decode('utf-8')
-    username = connectedUsers[get_ident()]
+    if get_ident() in connectedUsers.keys():
+        username = connectedUsers[get_ident()]
+    else:
+        print("User not connected")
+        return
     if oldPass == users[username][0]:
         users[username][0] = newPass
     else:
@@ -64,6 +68,41 @@ def handleHoF(data, users, s):
     if not message:
         message = b"There are no users in the system."
     s.sendall(message)
+
+
+def sendTCP(message, s):
+    s.sendall(message)
+
+
+def sendUDP(message, s, address):
+    s.sendto(message, address)
+
+
+def recTCP(conn):
+    data = conn.recv(1024)
+    return data
+
+
+def recUDP(conn):
+    bytesAddressPair = conn.recvfrom(1024)
+    return bytesAddressPair
+
+
+def recMessage(s, tcp):
+    if tcp:
+        return recTCP(s)
+    else:
+        return recUDP(s)
+
+
+def sendMessage(message, s, tcp, address=None):
+    if tcp:
+        sendTCP(message, s)
+    else:
+        if not address:
+            print("UDP ERROR: address not set on send.")
+        else:
+            sendUDP(message, s, address)
 
 
 def statusToStr(status):
@@ -111,7 +150,7 @@ def handleTCPClient(conn, addr, users):
     with conn:
         print(f"Connected by {addr} using TCP")
         while True:
-            data = conn.recv(1024)
+            data = recTCP(conn)
             print(data)
             if not data:
                 break
@@ -119,10 +158,8 @@ def handleTCPClient(conn, addr, users):
             print(comm)
             if comm == b"newU":
                 handleNew(data, users, connectedUsers)
-
             elif comm == b"in__":
                 handleLogin(data, users, connectedUsers)
-
             elif comm == b"list":
                 handleList(data, connectedUsers, conn)
             elif comm == b"hall":
