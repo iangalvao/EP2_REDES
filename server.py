@@ -15,12 +15,12 @@ def handleNew(data, users, connectedUsers):
     # send(newACK)
 
 
-def handlePass(data, users, connectedUsers):
+def handlePass(data, users, connectedUsers, addr):
     oldLen = int(data[4:7])
     oldPass = data[7:7+oldLen].decode('utf-8')
     newPass = data[7+oldLen:].decode('utf-8')
-    if get_ident() in connectedUsers.keys():
-        username = connectedUsers[get_ident()]
+    if addr in connectedUsers.keys():
+        username = connectedUsers[addr]
     else:
         print("User not connected")
         return
@@ -32,15 +32,18 @@ def handlePass(data, users, connectedUsers):
     # send(newACK)
 
 
-def handleLogin(data, users, connectedUsers):
+def handleLogin(data, users, connectedUsers, addr):
     unameLen = int(data[4:7])
     username = data[7:7+unameLen].decode('utf-8')
     password = data[7+unameLen:].decode('utf-8')
     print(
         f"LOGIN username length:{unameLen}\nusername:{username}\npassword:{password}")
+    if not (username in users.keys()):
+        print(f"Login Attempt Failed. User = {username}, pass: {password}")
+        return
     if users[username][0] == password:
         print(f"user {username}: connected.")
-        connectedUsers[get_ident()] = username
+        connectedUsers[addr] = username
         # send(loginACK)
     else:
         # send(loginNACK)
@@ -48,26 +51,26 @@ def handleLogin(data, users, connectedUsers):
         pass
 
 
-def handleLogout(connectedUsers, s):
-    connectedUsers.pop(get_ident())
+def handleLogout(connectedUsers, s, addr):
+    connectedUsers.pop(addr)
     # send(logoutACK)
     print(connectedUsers)
 
 
-def handleList(data, connectedUsers, s):
+def handleList(data, connectedUsers, s, address, connType):
     message = createList(data, connectedUsers)
     message = str.encode(message)
     if not message:
         message = b"There are no users connected."
-    s.sendall(message)
+    sendMessage(message, s, address, connType)
 
 
-def handleHoF(data, users, s):
+def handleHoF(data, users, s, addr, connType):
     message = createHoF(data, users)
     message = str.encode(message)
     if not message:
         message = b"There are no users in the system."
-    s.sendall(message)
+    sendMessage(message, s, addr, connType)
 
 
 def sendTCP(message, s):
@@ -88,21 +91,18 @@ def recUDP(conn):
     return bytesAddressPair
 
 
-def recMessage(s, tcp):
-    if tcp:
+def recMessage(s, connType):
+    if connType == "tcp":
         return recTCP(s)
     else:
         return recUDP(s)
 
 
-def sendMessage(message, s, tcp, address=None):
-    if tcp:
+def sendMessage(message, s, address, connType):
+    if connType == "tcp":
         sendTCP(message, s)
     else:
-        if not address:
-            print("UDP ERROR: address not set on send.")
-        else:
-            sendUDP(message, s, address)
+        sendUDP(message, s, address)
 
 
 def statusToStr(status):
@@ -131,47 +131,50 @@ def createList(data, connectedUsers):
     for tnum, user in connectedUsers.items():
         message += f"{len(user):03d}"
         message += user
+        print("KEY = ", tnum)
         message += statusToStr(tnum)
         message += '\n'
     return message
 
 
 def handleUDPClient(bytesAddressPair, s):
-    msgFromServer = "Hello UDP Client"
-    bytesToSend = str.encode(msgFromServer)
 
-    message = bytesAddressPair[0]
+    data = bytesAddressPair[0]
     address = bytesAddressPair[1]
+
     print(f"Connected by {address} using UDP.")
-    s.sendto(bytesToSend, address)
+    handleCommand(data, s, address, users, connectedUsers, "udp")
 
 
-def handleTCPClient(conn, addr, users):
-    with conn:
-        print(f"Connected by {addr} using TCP")
-        while True:
-            data = recTCP(conn)
-            print(data)
-            if not data:
-                break
-            comm = data[0:4]
-            print(comm)
-            if comm == b"newU":
-                handleNew(data, users, connectedUsers)
-            elif comm == b"in__":
-                handleLogin(data, users, connectedUsers)
-            elif comm == b"list":
-                handleList(data, connectedUsers, conn)
-            elif comm == b"hall":
-                handleHoF(data, users, conn)
-            elif comm == b"out_":
-                print("starting logout")
-                handleLogout(connectedUsers, conn)
-            elif comm == b"pass":
-                handlePass(data, users, connectedUsers)
-            else:
-                print("not a command")
-    # conn.sendall(data)
+def handleTCPClient(conn, addr, users, connectedUsers):
+    print(f"Connected by {addr} using TCP")
+    while True:
+        data = recTCP(conn)
+        print(data)
+        if not data:
+            break
+        handleCommand(data, conn, addr, users, connectedUsers, "tcp")
+# conn.sendall(data)
+
+
+def handleCommand(data, s, address, users, connectedUsers, connType):
+    comm = data[0:4]
+    print(comm)
+    if comm == b"newU":
+        handleNew(data, users, connectedUsers)
+    elif comm == b"in__":
+        handleLogin(data, users, connectedUsers, address)
+    elif comm == b"list":
+        handleList(data, connectedUsers, s, address, connType)
+    elif comm == b"hall":
+        handleHoF(data, users, s, address, connType)
+    elif comm == b"out_":
+        print("starting logout")
+        handleLogout(connectedUsers, s, address)
+    elif comm == b"pass":
+        handlePass(data, users, connectedUsers, address)
+    else:
+        print("not a command")
 
 
 def listenUDP(host, port, bufferSize):
@@ -192,7 +195,8 @@ def listenTCP(host, port, users):
         s.listen()
         while True:
             conn, addr = s.accept()
-            t = Thread(target=handleTCPClient, args=(conn, addr, users, ))
+            t = Thread(target=handleTCPClient, args=(
+                conn, addr, users, connectedUsers))
             threadsTCP.append(t)
             t.start()
 
