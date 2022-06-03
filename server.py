@@ -65,6 +65,31 @@ def handleList(data, connectedUsers, s, address, connType):
     sendMessage(message, s, address, connType)
 
 
+def handleCall(data, connectedUsers, s, address, connType):
+    unameLen = int(data[4:7])
+    username = data[7:7+unameLen].decode('ASCII')
+    message = ""
+    for addr, usr in connectedUsers.items():
+        if usr == username:
+            message = addr
+    if message != "":
+        message = packAddress(message)
+        sendMessage(message, s, address, connType)
+    else:
+        sendMessage(b"NACK", s, address, connType)
+
+
+def packAddress(addr):
+    print(addr)
+    message = ""
+    message += addr[0]
+    message += " "
+    message += f"{addr[1]}"
+    print(message)
+    message = bytes(message, encoding="ASCII")
+    return message
+
+
 def handleHoF(data, users, s, addr, connType):
     message = createHoF(data, users)
     message = str.encode(message)
@@ -173,6 +198,8 @@ def handleCommand(data, s, address, users, connectedUsers, connType):
         handleLogout(connectedUsers, s, address)
     elif comm == b"pass":
         handlePass(data, users, connectedUsers, address)
+    elif comm == b"call":
+        handleCall(data, connectedUsers, s, address, connType)
     else:
         print("not a command")
 
