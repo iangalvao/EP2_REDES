@@ -223,7 +223,15 @@ def processOpponent(opponent, login: Login, inputs: list, s, addr: tuple):
                 login.waiting = 0
             # jogo terminou. resultado na posição 20 da mensagem.
             else:
-                result = message[20]
+                winner = message[20]
+                if winner == "D":
+                    result = 0
+                elif winner == "X":
+                    result = 1
+                elif winner == "O":
+                    result = -1
+                else:
+                    print("FAILED TO PARSE RESULT")
                 printResult(result, login)
                 login.endgame()
             message = packTACK()
@@ -289,6 +297,7 @@ def packEnd(result):
         winner = "O"
     if result == 0:
         winner = "D"
+    print("Pack end Winner:", winner)
     return f"endGame{winner}"
 
 
@@ -471,6 +480,19 @@ def runTCP(host, port):
                                             bytes(message, encoding="ASCII"))
 
                                         login.waiting = 1
+                                if comm[0] == "over":
+                                    if login.marker == "X":
+                                        result = -1
+                                    else:
+                                        result = 1
+                                    message = packTable(login)
+                                    message += packEnd(result)
+                                    opponent.sendall(
+                                        bytes(message, encoding="ASCII"))
+                                    message = packResult(result, login)
+                                    s.sendall(bytes(message, encoding="ASCII"))
+                                    printResult(result, login)
+                                    login.endgame()
 
                         print("JogoDaVelha >", end="")
                         sys.stdout.flush()

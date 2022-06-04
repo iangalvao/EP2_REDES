@@ -20,7 +20,7 @@ def unpackEndGame(data):
     result = message[4]
     if result == "V":
         res = 1
-    elif result == "D":
+    elif result == "E":
         res = 0
     else:
         res = -1
