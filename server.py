@@ -1,3 +1,6 @@
+import time
+from cProfile import run
+import select
 import sys
 import socket
 from threading import Thread, get_ident
@@ -226,27 +229,70 @@ def createList(data, connectedUsers):
     return message
 
 
-def handleUDPClient(bytesAddressPair, s):
+class ClientState():
+    def __init__(self) -> None:
+        self.lasthearbeat = 0
+        self.conn = 0
+        self.lasthbACK = 0
+        self.sendhb = 1
 
+
+def handleUDPClient(bytesAddressPair, s, udpUsers):
     data = bytesAddressPair[0]
     address = bytesAddressPair[1]
 
     print(f"Connected by {address} using UDP.")
-    handleCommand(data, s, address, users, connectedUsers, "udp")
+
+    if address in udpUsers.keys():
+        cS = udpUsers[address]
+    else:
+        cS = ClientState()
+        udpUsers[address] = cS
+
+    handleCommand(data, s, address, users, connectedUsers, "udp", cS)
 
 
 def handleTCPClient(conn, addr, users, connectedUsers):
     print(f"Connected by {addr} using TCP")
-    while True:
-        data = recTCP(conn)
-        print(data)
-        if not data:
-            break
-        handleCommand(data, conn, addr, users, connectedUsers, "tcp")
+    running = 1
+
+    inputs = [conn]
+    cS = ClientState()
+    while running:
+
+        now = time.time()
+
+        timediff = now - cS.lasthbACK
+        if timediff >= 1:
+            print("Time+1")
+            if cS.sendhb == 1:
+                conn.sendall(b"HRTB")
+                cS.lasthearbeat = time.time()
+                cS.sendhb = 0
+            else:
+                if timediff > 30:
+                    print("Disconecting Client. No heartbeat response.")
+                    conn.close()
+                    running = 0
+                    break
+        try:
+            inputready, outputready, exceptready = select.select(
+                inputs, [], [], 1)
+        except select.error as e:
+            print(e)
+        for x in inputready:
+            if x.fileno() == conn.fileno():
+                data = recTCP(conn)
+                print(data)
+                if not data:
+                    print(f"Client Disconnected: {addr}")
+                    running = 0
+                handleCommand(data, conn, addr, users,
+                              connectedUsers, "tcp", cS)
 # conn.sendall(data)
 
 
-def handleCommand(data, s, address, users, connectedUsers, connType):
+def handleCommand(data, s, address, users, connectedUsers, connType, cS: ClientState):
     comm = data[0:4]
     print(comm)
     if comm == b"newU":
@@ -268,17 +314,22 @@ def handleCommand(data, s, address, users, connectedUsers, connType):
         handleGame(data, connectedUsers, s, address, connType)
     elif comm == b"endG":
         handleEndGame(data, users, connectedUsers, s, address, connType)
+    elif comm == b"HACK":
+        cS.lasthbACK = time.time()
+        cS.sendhb = 1
     else:
         print(f"not a command: {comm}")
 
 
 def listenUDP(host, port, bufferSize):
     threadsUDP = []
+    udpUsers = {}
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         s.bind((HOST, port))
         while(True):
             bytesAddressPair = s.recvfrom(bufferSize)
-            t = Thread(target=handleUDPClient, args=(bytesAddressPair, s,))
+            t = Thread(target=handleUDPClient, args=(
+                bytesAddressPair, s, udpUsers))
             threadsUDP.append(t)
             t.start()
 

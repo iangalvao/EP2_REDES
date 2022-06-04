@@ -12,6 +12,38 @@ HOST = "127.0.0.1"  # The server's hostname or IP address
 PORT = 8000  # The port used by the server
 
 
+def sendTCP(message, s):
+    s.sendall(message)
+
+
+def sendUDP(message, s, address):
+    s.sendto(message, address)
+
+
+def recTCP(conn):
+    data = conn.recv(1024)
+    return data
+
+
+def recUDP(conn):
+    bytesAddressPair = conn.recvfrom(1024)
+    return bytesAddressPair
+
+
+def recMessage(s, connType):
+    if connType == "tcp":
+        return recTCP(s)
+    else:
+        return recUDP(s)
+
+
+def sendMessage(message, s, address, connType):
+    if connType == "tcp":
+        sendTCP(message, s)
+    else:
+        sendUDP(message, s, address)
+
+
 def callOpponent(data, server):
     data = data.decode("ASCII").split(" ")
     host = data[0]
@@ -381,14 +413,10 @@ def runTCP(host, port):
         print("JogoDaVelha >", end="")
         sys.stdout.flush()
         while running:
-            # print("JogoDaVelha >", end="")
-            # comm = input("JogoDaVelha>").split()
             inputready, outputready, exceptready = select.select(
                 inputs, [], [])
-
             for x in inputready:
                 if x.fileno() == sys.stdin.fileno():
-
                     comm = sys.stdin.readline().strip().split(" ")
                     if login.request == 1:
                         if comm[0] == "yes":
@@ -519,6 +547,8 @@ def processServer(login, s, addr):
         message = message.decode("ASCII")
         print(f"Starting Game. You are {message[4]}.")
         login.startgame(message[4])
+    if comm[0:4] == b"HRTB":
+        s.sendall(b"HACK")
 
 
 if len(sys.argv) == 4:
