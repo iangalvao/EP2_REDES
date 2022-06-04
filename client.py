@@ -13,7 +13,7 @@ PORT = 8000  # The port used by the server
 
 
 def sendTCP(message, s):
-    s.sendall(message)
+    sendMessage(message, s, addr, connType)
 
 
 def sendUDP(message, s, address):
@@ -51,7 +51,7 @@ def callOpponent(data, server):
     print(f"HOST / PORT = {host} / {port}")
     opponent = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     opponent.connect((host, port+1))
-    opponent.sendall(b"call")
+    sendMessage(b"call", opponent, addr, connType)
     return opponent
 
 
@@ -232,7 +232,8 @@ def processOpponent(opponent, login: Login, inputs: list, s, addr: tuple):
         elif message == b"callACK":
             if login.state == 1:
                 message = packGame(login.name, login.opponent)
-                s.sendall(bytes(message, encoding="ASCII"))
+                sendMessage(bytes(message, encoding="ASCII"),
+                            s, addr, connType)
             else:
                 print(
                     "You need to execute login. Use in <usr> <pass>.")
@@ -243,7 +244,7 @@ def processOpponent(opponent, login: Login, inputs: list, s, addr: tuple):
             y = int(message[5])
             print("x / y: ", x, " / ", y)
             login.play(x, y, True)
-            opponent.sendall(b"pACK")
+            sendMessage(b"pACK", opponent, addr, connType)
 
         elif message[0:4] == b"tabl":
             message = message.decode("ASCII")
@@ -267,8 +268,8 @@ def processOpponent(opponent, login: Login, inputs: list, s, addr: tuple):
                 printResult(result, login)
                 login.endgame()
             message = packTACK()
-            opponent.sendall(
-                bytes(message, encoding="ASCII"))
+            sendMessage(bytes(message, encoding="ASCII"),
+                        opponent, addr, connType)
 
         elif message[0:4] == b"tACK":
             pass
@@ -277,15 +278,16 @@ def processOpponent(opponent, login: Login, inputs: list, s, addr: tuple):
             result = login.checkEnd()
             if result:
                 message += packEnd(result)
-                opponent.sendall(
-                    bytes(message, encoding="ASCII"))
+                sendMessage(bytes(message, encoding="ASCII"),
+                            opponent, addr, connType)
                 message = packResult(result, login)
-                s.sendall(bytes(message, encoding="ASCII"))
+                sendMessage(bytes(message, encoding="ASCII"),
+                            s, addr, connType)
                 printResult(result, login)
                 login.endgame()
             else:
-                opponent.sendall(
-                    bytes(message, encoding="ASCII"))
+                sendMessage(bytes(message, encoding="ASCII"),
+                            opponent, addr, connType)
 
 
 def printResult(result, login):
@@ -421,7 +423,7 @@ def runTCP(host, port):
                     if login.request == 1:
                         if comm[0] == "yes":
                             print("ACCEPTED CALL")
-                            opponent.sendall(b"callACK")
+                            sendMessage(b"callACK", opponent, addr, connType)
                             comm = None
                         else:
                             login.request == 0
@@ -432,7 +434,8 @@ def runTCP(host, port):
                                     print("uso: new <usuario> <senha>")
                                 else:
                                     message = packNew(comm[1], comm[2])
-                                    s.sendall(bytes(message, encoding="ASCII"))
+                                    sendMessage(
+                                        bytes(message, encoding="ASCII"), s, addr, connType)
                             elif comm[0] == "in":
                                 if len(comm) != 3:
                                     print("uso: in <usuario> <senha>")
@@ -440,23 +443,26 @@ def runTCP(host, port):
                                     # alterar para inAck
                                     login.login(comm[1], comm[2])
                                     message = packIn(comm[1], comm[2])
-                                    s.sendall(bytes(message, encoding="ASCII"))
+                                    sendMessage(
+                                        bytes(message, encoding="ASCII"), s, addr, connType)
                             elif comm[0] == "list":
                                 message = packList()
                                 message = str.encode(message)
-                                s.sendall(message)
+                                sendMessage(message, s, addr, connType)
                             #  message = s.recv(1024)
                             # print(message.decode('utf-8'))
                             elif comm[0] == "hall":
                                 message = packHall()
-                                s.sendall(bytes(message, encoding="ASCII"))
+                                sendMessage(
+                                    bytes(message, encoding="ASCII"), s, addr, connType)
                                 # message = s.recv(1024)
 
                             elif comm[0] == "out":
                                 if login.state == 1:
                                     login.logout
                                     message = packOut(login)
-                                    s.sendall(bytes(message, encoding="ASCII"))
+                                    sendMessage(
+                                        bytes(message, encoding="ASCII"), s, addr, connType)
                                 else:
                                     print(
                                         "You need to execute login. Use in <usr> <pass>.")
@@ -468,8 +474,8 @@ def runTCP(host, port):
                                         message = packPass(
                                             comm[1], comm[2], login)
                                         login.password = comm[2]
-                                        s.sendall(
-                                            bytes(message, encoding="ASCII"))
+                                        sendMessage(
+                                            bytes(message, encoding="ASCII"), s, addr, connType)
                                     else:
                                         print(
                                             "You need to execute login. Use in <usr> <pass>.")
@@ -481,8 +487,8 @@ def runTCP(host, port):
                                         print("uso: call <oponent>")
                                     else:
                                         message = packCall(comm[1], login)
-                                        s.sendall(
-                                            bytes(message, encoding="ASCII"))
+                                        sendMessage(
+                                            bytes(message, encoding="ASCII"), s, addr, connType)
                                         message = s.recv(1024)
                                         opponent = callOpponent(message, s)
                                         login.opponent = comm[1]
@@ -504,8 +510,8 @@ def runTCP(host, port):
                                         message = packPlay(comm[1], comm[2])
                                         login.play(
                                             int(comm[1]), int(comm[2]), False)
-                                        opponent.sendall(
-                                            bytes(message, encoding="ASCII"))
+                                        sendMessage(
+                                            bytes(message, encoding="ASCII"), opponent, addr, connType)
 
                                         login.waiting = 1
                                 if comm[0] == "over":
@@ -515,10 +521,11 @@ def runTCP(host, port):
                                         result = 1
                                     message = packTable(login)
                                     message += packEnd(result)
-                                    opponent.sendall(
-                                        bytes(message, encoding="ASCII"))
+                                    sendMessage(
+                                        bytes(message, encoding="ASCII"), opponent, addr, connType)
                                     message = packResult(result, login)
-                                    s.sendall(bytes(message, encoding="ASCII"))
+                                    sendMessage(
+                                        bytes(message, encoding="ASCII"), s, addr, connType)
                                     printResult(result, login)
                                     login.endgame()
 
@@ -548,7 +555,7 @@ def processServer(login, s, addr):
         print(f"Starting Game. You are {message[4]}.")
         login.startgame(message[4])
     if comm[0:4] == b"HRTB":
-        s.sendall(b"HACK")
+        sendMessage(b"HACK", s, addr, connType)
 
 
 if len(sys.argv) == 4:
