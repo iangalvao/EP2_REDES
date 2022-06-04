@@ -15,13 +15,37 @@ def handleNew(data, users, connectedUsers):
     # send(newACK)
 
 
-def handlePass(data, users, connectedUsers, addr):
+def handleGame(data, connectedUsers, s, address, connType):
+    unameLen = int(data[4:7])
+    player1 = data[7:7+unameLen].decode('ASCII')
+    player2 = data[7+unameLen:].decode('ASCII')
+    print("player1:", player1)
+    print("player2:", player2)
+    p1conn = connectedUsers[player1]["conn"][0]
+    p1connType = connectedUsers[player1]["conn"][1]
+    p2conn = connectedUsers[player2]["conn"][0]
+    p2connType = connectedUsers[player2]["conn"][1]
+    p1conn.sendall(b"gameX")
+    p2conn.sendall(b"gameO")
+
+
+def unpackPass(data):
+    cursor = 7
     oldLen = int(data[4:7])
-    oldPass = data[7:7+oldLen].decode('utf-8')
-    newPass = data[7+oldLen:].decode('utf-8')
-    if addr in connectedUsers.keys():
-        username = connectedUsers[addr]
-    else:
+    oldPass = data[cursor:cursor+oldLen].decode('ASCII')
+    cursor += oldLen
+    newLen = int(data[cursor:cursor+3])
+    cursor += 3
+    newPass = data[cursor:cursor + newLen].decode('ASCII')
+    cursor += newLen
+    usr = data[cursor:].decode("ASCII")
+    return (oldPass, newPass, usr)
+
+
+def handlePass(data, users, connectedUsers, addr):
+    oldPass, newPass, username = unpackPass(data)
+
+    if username not in connectedUsers.keys():
         print("User not connected")
         return
     if oldPass == users[username][0]:
@@ -32,7 +56,7 @@ def handlePass(data, users, connectedUsers, addr):
     # send(newACK)
 
 
-def handleLogin(data, users, connectedUsers, addr):
+def handleLogin(data, users, connectedUsers, addr, s, connType):
     unameLen = int(data[4:7])
     username = data[7:7+unameLen].decode('utf-8')
     password = data[7+unameLen:].decode('utf-8')
@@ -43,7 +67,7 @@ def handleLogin(data, users, connectedUsers, addr):
         return
     if users[username][0] == password:
         print(f"user {username}: connected.")
-        connectedUsers[addr] = username
+        connectedUsers[username] = {"addr": addr, "conn": (s, connType)}
         # send(loginACK)
     else:
         # send(loginNACK)
@@ -51,8 +75,23 @@ def handleLogin(data, users, connectedUsers, addr):
         pass
 
 
-def handleLogout(connectedUsers, s, addr):
-    connectedUsers.pop(addr)
+def unpackLogout(data):
+    cursor = 7
+    nameLen = int(data[4:7])
+    name = data[cursor:cursor+nameLen].decode('ASCII')
+    cursor += nameLen
+    password = data[cursor:].decode("ASCII")
+    return (name, password)
+
+
+def handleLogout(data, users, connectedUsers, s, addr):
+    username, password = unpackLogout(data)
+    print(f"login out usr:{username}, pass: {password}")
+    if username in connectedUsers.keys():
+        if users[username][0] == password:
+            connectedUsers.pop(username)
+    else:
+        print("Failed logout attemp.")
     # send(logoutACK)
     print(connectedUsers)
 
@@ -69,11 +108,9 @@ def handleCall(data, connectedUsers, s, address, connType):
     unameLen = int(data[4:7])
     username = data[7:7+unameLen].decode('ASCII')
     message = ""
-    for addr, usr in connectedUsers.items():
-        if usr == username:
-            message = addr
-    if message != "":
-        message = packAddress(message)
+    addr = connectedUsers[username]["addr"]
+    if addr:
+        message = packAddress(addr)
         sendMessage(message, s, address, connType)
     else:
         sendMessage(b"NACK", s, address, connType)
@@ -153,11 +190,10 @@ def historyToStr(data):
 
 def createList(data, connectedUsers):
     message = ""
-    for tnum, user in connectedUsers.items():
+    for user, attrs in connectedUsers.items():
         message += f"{len(user):03d}"
         message += user
-        print("KEY = ", tnum)
-        message += statusToStr(tnum)
+        message += "Connected"
         message += '\n'
     return message
 
@@ -188,20 +224,22 @@ def handleCommand(data, s, address, users, connectedUsers, connType):
     if comm == b"newU":
         handleNew(data, users, connectedUsers)
     elif comm == b"in__":
-        handleLogin(data, users, connectedUsers, address)
+        handleLogin(data, users, connectedUsers, address, s, connType)
     elif comm == b"list":
         handleList(data, connectedUsers, s, address, connType)
     elif comm == b"hall":
         handleHoF(data, users, s, address, connType)
     elif comm == b"out_":
         print("starting logout")
-        handleLogout(connectedUsers, s, address)
+        handleLogout(data, users, connectedUsers, s, address)
     elif comm == b"pass":
         handlePass(data, users, connectedUsers, address)
     elif comm == b"call":
         handleCall(data, connectedUsers, s, address, connType)
+    elif comm == b"game":
+        handleGame(data, connectedUsers, s, address, connType)
     else:
-        print("not a command")
+        print(f"not a command: {comm}")
 
 
 def listenUDP(host, port, bufferSize):

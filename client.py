@@ -1,6 +1,8 @@
+from email import message
 import select
 import socket
 import sys
+from click import command
 
 from psycopg2 import connect
 from requests import request
@@ -28,10 +30,18 @@ def packNew(user, password):
     return message
 
 
-def packPass(old, new):
+def packGame(usr, opp):
+    command = "game"
+    usrLen = len(usr)
+    message = f"{command}{usrLen:03d}{usr}{opp}"
+    return message
+
+
+def packPass(old, new, login):
     command = "pass"
     oldLen = len(old)
-    message = f"{command}{oldLen:03d}{old}{new}"
+    newLen = len(new)
+    message = f"{command}{oldLen:03d}{old}{newLen:03d}{new}{login.name}"
     return message
 
 
@@ -50,22 +60,27 @@ def packHall():
     return "hall"
 
 
-def packOut():
-    return "out_"
+def packOut(login):
+    usrLen = len(login.name)
+    return f"out_{usrLen:03d}{login.name}{login.password}"
 
 
-def packCall(opponent):
+def packCall(opponent, login):
     command = "call"
     opponentLen = len(opponent)
-    message = f"{command}{opponentLen:03d}{opponent}"
+    nameLen = len(login.name)
+    message = f"{command}{opponentLen:03d}{opponent}{nameLen}{login.name}{login.password}"
     return message
 
 
 class Login():
     def __init__(self) -> None:
         self.name = None
+        self.opponent = None
         self.password = None
         self.state = 0
+        self.game = 0
+        self.marker = ""
 
     def login(self, name, password):
         self.name = name
@@ -76,6 +91,11 @@ class Login():
         self.name = None
         self.password = None
         self.state = 0
+        self.game = 0
+
+    def startgame(self, marker):
+        self.game = 1
+        self.marker = marker
 
 
 def runUDP(serverAddressPort):
@@ -170,7 +190,7 @@ def runTCP(host, port):
                     if request == 1:
                         if comm[0] == "yes":
                             print("ACCEPTED CALL")
-                            opponent.sendall("callACK")
+                            opponent.sendall(b"callACK")
                             comm = None
                         else:
                             request == 0
@@ -203,20 +223,22 @@ def runTCP(host, port):
                         elif comm[0] == "out":
                             if login.state == 1:
                                 login.logout
-                                message = packOut()
+                                message = packOut(login)
                                 s.sendall(bytes(message, encoding="ASCII"))
                             else:
-                                print("You execute login. Use in <usr> <pass>.")
+                                print(
+                                    "You need to execute login. Use in <usr> <pass>.")
                         elif comm[0] == "pass":
                             if len(comm) != 3:
                                 print("uso: pass <senha> <nova_senha>")
                             else:
                                 if login.state == 1:
-                                    message = packPass(comm[1], comm[2])
+                                    message = packPass(comm[1], comm[2], login)
+                                    login.password = comm[2]
                                     s.sendall(bytes(message, encoding="ASCII"))
                                 else:
                                     print(
-                                        "You execute login. Use in <usr> <pass>.")
+                                        "You need to execute login. Use in <usr> <pass>.")
                         elif comm[0] == "bye":
                             running = 0
                         elif comm[0] == "call":
@@ -224,21 +246,31 @@ def runTCP(host, port):
                                 if len(comm) != 2:
                                     print("uso: call <oponent>")
                                 else:
-                                    message = packCall(comm[1])
+                                    message = packCall(comm[1], login)
                                     s.sendall(bytes(message, encoding="ASCII"))
                                     message = s.recv(1024)
                                     opponent = callOpponent(message, s)
+                                    login.opponent = comm[1]
                                     inputs.append(opponent)
                                     print(message)
                             else:
-                                print("You execute login. Use in <usr> <pass>.")
+                                print(
+                                    "You need to execute login. Use in <usr> <pass>.")
                         else:
                             print(f"Comando não reconhecido:{comm}.")
                     print("JogoDaVelha >", end="")
                     sys.stdout.flush()
+
+                # Trata de leituras no socket que conecta com o servidor.
                 elif x.fileno() == s.fileno():
                     message = s.recv(1024)
                     print(message.decode('ASCII'))
+                    print("JogoDaVelha >", end="")
+                    comm = message[0:4]
+                    if comm == b"game":
+                        login.startgame(message[4])
+
+                # Trata de leituras no socket que escuta requesições de partidas.
                 elif x.fileno() == listenConn.fileno():
                     opponent, addr = listenConn.accept()
                     inputs.append(opponent)
@@ -249,6 +281,7 @@ def runTCP(host, port):
                         inputs.remove(opponent)
                         opponent.close()
                         opponent = None
+                        print("Opponent closed connection.")
                     else:
                         #message = message.decode('ASCII')
                         print("RECIEVED: ", message.decode('ASCII'))
@@ -256,14 +289,17 @@ def runTCP(host, port):
                             if login.state == 1:
                                 print(
                                     "NEW PLAY REQUEST. TYPE yes TO ACCEPT OR OTHER TO REFUSE.")
+                                print("JogoDaVelha >", end="")
                                 request = 1
                             else:
                                 pass
                         elif message == b"callACK":
                             if login.state == 1:
-                                s.sendall(b"GAME")
+                                message = packGame(login.name, login.opponent)
+                                s.sendall(bytes(message, encoding="ASCII"))
                             else:
-                                print("You execute login. Use in <usr> <pass>.")
+                                print(
+                                    "You need to execute login. Use in <usr> <pass>.")
 
 
 if len(sys.argv) == 4:
