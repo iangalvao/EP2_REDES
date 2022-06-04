@@ -484,8 +484,8 @@ def runClient(addr, s, connType):
 
 def processServer(login, s, addr, connType):
     message = s.recv(1024)
-    print(message.decode('ASCII'))
-    print("JogoDaVelha >", end="")
+    # print(message.decode('ASCII'))
+    #print("JogoDaVelha >", end="")
     comm = message[0:4]
     if comm[0:4] == b"game":
         message = message.decode("ASCII")

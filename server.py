@@ -54,10 +54,14 @@ def handleGame(data, connectedUsers, s, address, connType):
     print("player2:", player2)
     p1conn = connectedUsers[player1]["conn"][0]
     p1connType = connectedUsers[player1]["conn"][1]
+    p1addr = connectedUsers[player1]["addr"]
     p2conn = connectedUsers[player2]["conn"][0]
     p2connType = connectedUsers[player2]["conn"][1]
-    p1conn.sendall(b"gameX")
-    p2conn.sendall(b"gameO")
+    p2addr = connectedUsers[player2]["addr"]
+
+    sendMessage(b"gameX", p1conn, p1addr, connType)
+    # Só funciona se os dois usarem o mesmo tipo de conexão
+    sendMessage(b"gameO", p2conn, p2addr, connType)
 
 
 def unpackPass(data):
