@@ -15,6 +15,34 @@ def handleNew(data, users, connectedUsers):
     # send(newACK)
 
 
+def unpackEndGame(data):
+    message = data.decode("ASCII")
+    result = message[4]
+    if result == "V":
+        res = 1
+    elif result == "D":
+        res = 0
+    else:
+        res = -1
+    usrLen = int(message[5:8])
+    player1 = message[8:8+usrLen]
+    player2 = message[8+usrLen:]
+    return (player1, player2, res)
+
+
+def handleEndGame(data, users, connectedUsers, s, address, connType):
+    player1, player2, result = unpackEndGame(data)
+    if result == 1:
+        users[player1][1] += 1
+    elif result == 0:
+        users[player1][2] += 1
+        users[player2][2] += 1
+    elif result == -1:
+        users[player2][1] += 1
+    connectedUsers[player1]["status"] = "Connected"
+    connectedUsers[player2]["status"] = "Connected"
+
+
 def handleGame(data, connectedUsers, s, address, connType):
     unameLen = int(data[4:7])
     player1 = data[7:7+unameLen].decode('ASCII')
@@ -238,6 +266,8 @@ def handleCommand(data, s, address, users, connectedUsers, connType):
         handleCall(data, connectedUsers, s, address, connType)
     elif comm == b"game":
         handleGame(data, connectedUsers, s, address, connType)
+    elif comm == b"endG":
+        handleEndGame(data, users, connectedUsers, s, address, connType)
     else:
         print(f"not a command: {comm}")
 
