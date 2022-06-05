@@ -410,7 +410,7 @@ def listenUDP(host, port, bufferSize, users, connectedUsers, recovery):
     threadsUDP = []
     udpUsers = {}
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-        s.bind((HOST, port))
+        s.bind(("", port))
         inputs = [s]
         while(True):
             try:
@@ -431,7 +431,7 @@ def listenUDP(host, port, bufferSize, users, connectedUsers, recovery):
 def listenTCP(host, port, users, connectedUsers, recovery):
     threadsTCP = []
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind((HOST, port))
+        s.bind(("", port))
         s.listen()
         while True:
             conn, addr = s.accept()

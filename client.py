@@ -372,7 +372,7 @@ def runClient(addr, s, connType):
     print(f"Connected to server by Host: {myHost} my Port: {myPort}")
 
     listenConn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    listenConn.bind((myHost, 0))
+    listenConn.bind(("", 0))
     listenConn.listen()
     name = listenConn.getsockname()
     playPort = name[1]
