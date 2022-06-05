@@ -1,0 +1,26 @@
+Este é um servidor de jogo da velha de arquitetura híbrida e consiste em dois códigos: o do cliente e o do servidor. 
+Todos os códigos foram feitos em python e a versão utilizada foi a 3.8.10. 
+Para rodar o programa, instale essa versão do python.
+
+O código do servidor é server.py e deve ser executado da seguinte forma:
+    python server.py <porta do servidor>
+
+Uma vez rodando, o servidor ficará escutando na porta indicada por mensagens tcp ou UDP.
+O servidor imprime no terminal eventos relevantes:
+
+
+O código do cliente é cliente.py e deve ser executado da seguinte forma:
+    python cliente.py <ip do servidor> <porta do servidor>
+
+Uma vez rodando, o cliente tentará se conectar ao servidor.
+Se conseguir, será mostrado o prompt JogoDaVelha> e o programa irá aguardar um comando
+Os comandos permitidos para um usuário não logado são:
+    new <usuário> <password> - cria um novo usuário
+    in <usuário> <password> - loga no sistema como <usuário>
+    list - mostra os usuário conectados e se estão jogando ou não. Cada usuário é mostrado em uma linha após o prompt seguido do status (Playing ou Connected). O status Playing indica que o usuário está em uma partida, e o Connected que ele está conectado e disponível para uma partida.
+    hall - mostra a lista de pontuação de cada usuário. Assim como o list, cada usuário é mostrado em uma linha iniciada pelo prompt, dessa vez seguido da sua pontuação separa de seu nome por uma barra(/)
+    bye - encerra o programa do cliente
+
+O programa do cliente não imprime o resultado das requisições para o servidor. Para acompanhar melhor a execução do programa é recomendado ler o shell do servidor, que irá imprimir o resultado das requisições e informações relevantes.
+
+
