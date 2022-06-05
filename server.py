@@ -1,20 +1,23 @@
 import time
-from cProfile import run
 import select
 import sys
 import socket
-from threading import Thread, get_ident
+from threading import Thread, Lock
 
 HOST = "127.0.0.1"  # Standard loopback interface address (localhost)
 PORT = 65432  # Port to listen on (non-privileged ports are > 1023)
 BUFFERSIZE = 1024
 
 
-def handleNew(data, users, connectedUsers):
+def handleNew(data, users, connectedUsers, usersFile):
     unameLen = int(data[4:7])
     username = data[7:7+unameLen].decode('utf-8')
     password = data[7+unameLen:].decode('utf-8')
     users[username] = [password, 0, 0, 0]
+    print(usersFile.name)
+    # mutex
+    usersFile.write(f"{username} {password}\n")
+    usersFile.flush()
     # send(newACK)
 
 
@@ -33,20 +36,30 @@ def unpackEndGame(data):
     return (player1, player2, res)
 
 
-def handleEndGame(data, users, connectedUsers, s, address, connType):
+def handleEndGame(data, users, connectedUsers, s, address, connType, pointsFile, logFile):
     player1, player2, result = unpackEndGame(data)
     if result == 1:
         users[player1][1] += 1
+        pointsFile.write(f"{player1}\n")
+        winner = player1
     elif result == 0:
         users[player1][2] += 1
         users[player2][2] += 1
+        pointsFile.write(f"{player1} {player2}\n")
     elif result == -1:
         users[player2][1] += 1
+        pointsFile.write(f"{player2}\n")
+        winner = player2
+    pointsFile.flush()
     connectedUsers[player1]["status"] = "Connected"
     connectedUsers[player2]["status"] = "Connected"
+    # mutex
+    logFile.write(f"MATCHEND {player1} {player2} {winner}\n")
+    logFile.flush()
+    # persist
 
 
-def handleGame(data, connectedUsers, s, address, connType):
+def handleGame(data, connectedUsers, s, address, connType, logFile):
     unameLen = int(data[4:7])
     player1 = data[7:7+unameLen].decode('ASCII')
     player2 = data[7+unameLen:].decode('ASCII')
@@ -62,6 +75,10 @@ def handleGame(data, connectedUsers, s, address, connType):
     sendMessage(b"gameX", p1conn, p1addr, connType)
     # Só funciona se os dois usarem o mesmo tipo de conexão
     sendMessage(b"gameO", p2conn, p2addr, connType)
+    # persist log
+    # mutex
+    logFile.write(f"MATCHSTART {player1} {player2}\n")
+    logFile.flush()
 
 
 def unpackPass(data):
@@ -77,7 +94,7 @@ def unpackPass(data):
     return (oldPass, newPass, usr)
 
 
-def handlePass(data, users, connectedUsers, addr):
+def handlePass(data, users, connectedUsers, addr, usersFile):
     oldPass, newPass, username = unpackPass(data)
 
     if username not in connectedUsers.keys():
@@ -85,13 +102,16 @@ def handlePass(data, users, connectedUsers, addr):
         return
     if oldPass == users[username][0]:
         users[username][0] = newPass
+        # mutex
+        usersFile.write(f"{username} {newPass}\n")
     else:
         print(
             f"Password Change Attempt Failed. User:{username}, password:{oldPass}")
+    # persist
     # send(newACK)
 
 
-def handleLogin(data, users, connectedUsers, addr, s, connType):
+def handleLogin(data, users, connectedUsers, addr, s, connType, logFile):
     unameLen = int(data[4:7])
     username = data[7:7+unameLen].decode('utf-8')
     password = data[7+unameLen:].decode('utf-8')
@@ -104,6 +124,10 @@ def handleLogin(data, users, connectedUsers, addr, s, connType):
         print(f"user {username}: connected.")
         connectedUsers[username] = {"addr": addr, "conn": (s, connType)}
         # send(loginACK)
+        # persist log
+        # mutex
+        logFile.write(f"LOGIN {username}\n")
+        logFile.flush()
     else:
         # send(loginNACK)
         print(f"Login Attempt Failed. User = {username}, pass: {password}")
@@ -119,12 +143,18 @@ def unpackLogout(data):
     return (name, password)
 
 
-def handleLogout(data, users, connectedUsers, s, addr):
+def handleLogout(data, users, connectedUsers, s, addr, logFile, mux):
     username, password = unpackLogout(data)
     print(f"login out usr:{username}, pass: {password}")
     if username in connectedUsers.keys():
         if users[username][0] == password:
             connectedUsers.pop(username)
+            # persist log
+            # mutex
+            mux.acquire()
+            logFile.write(f"LOGOUT {username}\n")
+            logFile.flush()
+            mux.release()
     else:
         print("Failed logout attemp.")
     # send(logoutACK)
@@ -196,6 +226,7 @@ def recMessage(s, connType):
 
 
 def sendMessage(message, s, address, connType):
+    message += "\n"
     if connType == "tcp":
         sendTCP(message, s)
     else:
@@ -211,6 +242,7 @@ def statusToStr(status):
 
 def createHoF(data, users):
     message = "Users/Points\n"
+
     for user, value in users.items():
         message += user + "/"
         message += historyToStr(value)
@@ -241,7 +273,7 @@ class ClientState():
         self.sendhb = 1
 
 
-def handleUDPClient(bytesAddressPair, s, udpUsers):
+def handleUDPClient(bytesAddressPair, s, udpUsers, user, connectedUsers,  recovery):
     data = bytesAddressPair[0]
     address = bytesAddressPair[1]
 
@@ -252,20 +284,31 @@ def handleUDPClient(bytesAddressPair, s, udpUsers):
     else:
         cS = ClientState()
         udpUsers[address] = cS
+        # persist log
+        # mutex
+        mux = recovery["mux"]
+        mux.acquire()
+        recovery["log"].write(f"CONN {address} UDP\n")
+        recovery["log"].flush()
+        mux.release()
 
-    handleCommand(data, s, address, users, connectedUsers, "udp", cS)
+    handleCommand(data, s, address, users, connectedUsers, "udp", cS, recovery)
 
 
-def handleTCPClient(conn, addr, users, connectedUsers):
+def handleTCPClient(conn, addr, users, connectedUsers, recovery):
     print(f"Connected by {addr} using TCP")
+    # mutex
+    mux = recovery["mux"]
+    mux.acquire()
+    recovery["log"].write(f"CONN {addr} TCP\n")
+    mux.release()
+    # persist log
     running = 1
 
     inputs = [conn]
     cS = ClientState()
     while running:
-
         now = time.time()
-
         timediff = now - cS.lasthbACK
         if timediff >= 1:
             print("Time+1")
@@ -292,40 +335,46 @@ def handleTCPClient(conn, addr, users, connectedUsers):
                     print(f"Client Disconnected: {addr}")
                     running = 0
                 handleCommand(data, conn, addr, users,
-                              connectedUsers, "tcp", cS)
+                              connectedUsers, "tcp", cS, recovery)
 # conn.sendall(data)
 
 
-def handleCommand(data, s, address, users, connectedUsers, connType, cS: ClientState):
-    comm = data[0:4]
-    print(comm)
-    if comm == b"newU":
-        handleNew(data, users, connectedUsers)
-    elif comm == b"in__":
-        handleLogin(data, users, connectedUsers, address, s, connType)
-    elif comm == b"list":
-        handleList(data, connectedUsers, s, address, connType)
-    elif comm == b"hall":
-        handleHoF(data, users, s, address, connType)
-    elif comm == b"out_":
-        print("starting logout")
-        handleLogout(data, users, connectedUsers, s, address)
-    elif comm == b"pass":
-        handlePass(data, users, connectedUsers, address)
-    elif comm == b"call":
-        handleCall(data, connectedUsers, s, address, connType)
-    elif comm == b"game":
-        handleGame(data, connectedUsers, s, address, connType)
-    elif comm == b"endG":
-        handleEndGame(data, users, connectedUsers, s, address, connType)
-    elif comm == b"HACK":
-        cS.lasthbACK = time.time()
-        cS.sendhb = 1
-    else:
-        print(f"not a command: {comm}")
+def handleCommand(stream, s, address, users, connectedUsers, connType, cS: ClientState, recovery):
+    stream = stream.split("\n")
+    for data in stream:
+        comm = data[0:4]
+        print(comm)
+        if comm == b"newU":
+            handleNew(data, users, connectedUsers, recovery["users"])
+        elif comm == b"in__":
+            handleLogin(data, users, connectedUsers, address,
+                        s, connType, recovery["log"])
+        elif comm == b"list":
+            handleList(data, connectedUsers, s, address, connType)
+        elif comm == b"hall":
+            handleHoF(data, users, s, address, connType)
+        elif comm == b"out_":
+            print("starting logout")
+            handleLogout(data, users, connectedUsers,
+                         s, address, recovery["log"])
+        elif comm == b"pass":
+            handlePass(data, users, connectedUsers, address, recovery["users"])
+        elif comm == b"call":
+            handleCall(data, connectedUsers, s, address, connType)
+        elif comm == b"game":
+            handleGame(data, connectedUsers, s, address,
+                       connType, recovery["log"])
+        elif comm == b"endG":
+            handleEndGame(data, users, connectedUsers, s,
+                          address, connType, recovery["points"], recovery["log"])
+        elif comm == b"HACK":
+            cS.lasthbACK = time.time()
+            cS.sendhb = 1
+        else:
+            print(f"not a command: {comm}")
 
 
-def listenUDP(host, port, bufferSize):
+def listenUDP(host, port, bufferSize, users, connectedUsers, recovery):
     threadsUDP = []
     udpUsers = {}
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
@@ -333,12 +382,12 @@ def listenUDP(host, port, bufferSize):
         while(True):
             bytesAddressPair = s.recvfrom(bufferSize)
             t = Thread(target=handleUDPClient, args=(
-                bytesAddressPair, s, udpUsers))
+                bytesAddressPair, s, udpUsers, users, connectedUsers, recovery))
             threadsUDP.append(t)
             t.start()
 
 
-def listenTCP(host, port, users):
+def listenTCP(host, port, users, connectedUsers, recovery):
     threadsTCP = []
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind((HOST, port))
@@ -346,7 +395,7 @@ def listenTCP(host, port, users):
         while True:
             conn, addr = s.accept()
             t = Thread(target=handleTCPClient, args=(
-                conn, addr, users, connectedUsers))
+                conn, addr, users, connectedUsers, recovery))
             threadsTCP.append(t)
             t.start()
 
@@ -355,12 +404,77 @@ users = {}
 connectedUsers = {}
 
 
+def loadUsers(f):
+    users = {}
+    lines = f.read().split('\n')
+    for line in lines:
+        if line:
+            data = line.split(" ")
+            users[data[0]] = [data[1], 0, 0, 0]
+    print(users)
+    return users
+
+
+def loadPoints(f, users):
+    lines = f.read().split('\n')
+    for line in lines:
+        if line:
+            data = line.split(" ")
+            if len(data) == 1:
+                user = data[0]
+                if user in users.keys():
+                    users[user][1] += 1
+            elif len(data) == 2:
+                user1 = data[0]
+                user2 = data[1]
+                if user1 in users.keys():
+                    users[user1][2] += 1
+                if user2 in users.keys():
+                    users[user2][2] += 1
+    print(users)
+    return users
+
+
 if len(sys.argv) == 2:
     port = (int)(sys.argv[1])
     print(port)
 else:
     port = PORT
-tcpT = Thread(target=listenTCP, args=(HOST, port, users,))
+
+try:
+    recovery = open("usersRecovery.txt", "r")
+    users = loadUsers(recovery)
+    recovery.close()
+    print("USERS RECOVERY FILE FOUND. USERS CREDENTIALS RECOVERED.")
+except FileNotFoundError:
+    print("USERS RECOVERY FILE NOT FOUND. CREATING NEW USERS FILE.")
+
+try:
+    recovery = open("pointsRecovery.txt", "r")
+    users = loadPoints(recovery, users)
+    recovery.close()
+    print("MATCHES HISTORY RECOVERY FILE FOUND. USERS POINTS RECOVERED.")
+except FileNotFoundError:
+    print("MATCHES HISTORY RECOVERY FILE NOT FOUND. CREATING NEW POINTS FILE.")
+
+try:
+    recovery = open("logFile.txt", "r")
+    #users, connectedUsers = loadLog(recovery, users)
+    recovery.close()
+    print("LOG RECOVERY FILE FOUND. CONNECTIONS AND MATCHES RECOVERED.")
+except FileNotFoundError:
+    print("LOG RECOVERY FILE NOT FOUND. CREATING CONNECTIONS AND MATCHES FILE.")
+
+
+mutex = Lock()
+usersRecovery = open("usersRecovery.txt", "a")
+pointRecovery = open("pointsRecovery.txt", "a")
+logFile = open("logFile.txt", "a")
+recovery = {"users": usersRecovery,
+            "points": pointRecovery, "log": logFile, "mux": mutex}
+tcpT = Thread(target=listenTCP, args=(
+    HOST, port, users, connectedUsers, recovery,))
 tcpT.start()
-udpT = Thread(target=listenUDP, args=(HOST, port, BUFFERSIZE,))
+udpT = Thread(target=listenUDP, args=(
+    HOST, port, BUFFERSIZE, users, connectedUsers, recovery,))
 udpT.start()

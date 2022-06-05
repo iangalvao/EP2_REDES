@@ -1,11 +1,8 @@
-from email import message
+import time
 import select
 import socket
 import sys
-from click import command
 
-from psycopg2 import connect
-from requests import request
 
 bufferSize = 1024
 HOST = "127.0.0.1"  # The server's hostname or IP address
@@ -130,6 +127,7 @@ class Login():
         self.marker = ""
         self.table = [0, 0, 0, 0, 0, 0, 0, 0, 0]
         self.request = 0
+        self.cS = ClientState()
 
     def login(self, name, password):
         self.name = name
@@ -154,6 +152,7 @@ class Login():
         self.waiting = 0
         self.marker = "-"
         self.table = [0, 0, 0, 0, 0, 0, 0, 0, 0]
+        self.cS = ClientState()
 
     def play(self, y, x, opponent):
         print("Play start. Table:", self.table)
@@ -220,7 +219,7 @@ def processOpponent(opponent, login: Login, inputs: list, s, addr: tuple, connTy
         login.endgame()
     else:
         # message = message.decode('ASCII')
-        print("RECIEVED: ", message.decode('ASCII'))
+
         if message == b"call":
             if login.state == 1:
                 print(
@@ -288,6 +287,14 @@ def processOpponent(opponent, login: Login, inputs: list, s, addr: tuple, connTy
             else:
                 sendMessage(bytes(message, encoding="ASCII"),
                             opponent, addr, "tcp")
+        elif message == b"BEAT":
+            opponent.sendall(b"BACK")
+        elif message == b"BACK":
+            login.cS.lasthbACK = time.time()
+            login.cS.sendhb = 1
+            login.cS.rtt = login.cS.lastbACK - login.cS.lastheartbeat
+
+        print("RECIEVED: ", message.decode('ASCII'))
 
 
 def printResult(result, login):
@@ -335,6 +342,14 @@ def packEnd(result):
     return f"endGame{winner}"
 
 
+class ClientState():
+    def __init__(self) -> None:
+        self.lasthearbeat = 0
+        self.conn = 0
+        self.lasthbACK = 0
+        self.sendhb = 1
+
+
 def runClient(addr, s, connType):
     name = s.getsockname()
     myHost = name[0]
@@ -350,7 +365,18 @@ def runClient(addr, s, connType):
     login = Login()
     print("JogoDaVelha >", end="")
     sys.stdout.flush()
+    login.cS = ClientState()
     while running:
+        if login.game == 1:
+            now = time.time()
+            timediff = now - login.cS.lasthbACK
+            if timediff >= 1:
+                print("Time+1")
+                if login.cS.sendhb == 1:
+                    opponent.sendall(b"BEAT")
+                    login.cS.lasthearbeat = time.time()
+                    login.cS.sendhb = 0
+
         inputready, outputready, exceptready = select.select(
             inputs, [], [])
         for x in inputready:
@@ -451,7 +477,7 @@ def runClient(addr, s, connType):
                                         bytes(message, encoding="ASCII"), opponent, addr, "tcp")
 
                                     login.waiting = 1
-                            if comm[0] == "over":
+                            elif comm[0] == "over":
                                 if login.marker == "X":
                                     result = -1
                                 else:
@@ -465,6 +491,8 @@ def runClient(addr, s, connType):
                                     bytes(message, encoding="ASCII"), s, addr, connType)
                                 printResult(result, login)
                                 login.endgame()
+                            elif comm[0] == "delay":
+                                print(f"{login.cS.rtt}")
 
                     print("JogoDaVelha >", end="")
                     sys.stdout.flush()
@@ -484,15 +512,20 @@ def runClient(addr, s, connType):
 
 def processServer(login, s, addr, connType):
     message = s.recv(1024)
+
     # print(message.decode('ASCII'))
-    #print("JogoDaVelha >", end="")
     comm = message[0:4]
     if comm[0:4] == b"game":
         message = message.decode("ASCII")
         print(f"Starting Game. You are {message[4]}.")
         login.startgame(message[4])
-    if comm[0:4] == b"HRTB":
+        print(message)
+    elif comm[0:4] == b"HRTB":
         sendMessage(b"HACK", s, addr, connType)
+    else:
+        print(message.decode('ASCII'))
+        sys.stdout.flush()
+        print("JogoDaVelha >", end="")
 
 
 if len(sys.argv) == 4:
