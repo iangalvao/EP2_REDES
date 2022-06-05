@@ -46,6 +46,7 @@ def handleEndGame(data, users, connectedUsers, s, address, connType, pointsFile,
         users[player1][2] += 1
         users[player2][2] += 1
         pointsFile.write(f"{player1} {player2}\n")
+        winner = ""
     elif result == -1:
         users[player2][1] += 1
         pointsFile.write(f"{player2}\n")
@@ -53,8 +54,10 @@ def handleEndGame(data, users, connectedUsers, s, address, connType, pointsFile,
     pointsFile.flush()
     connectedUsers[player1]["status"] = "Connected"
     connectedUsers[player2]["status"] = "Connected"
+    p1addr = connectedUsers[player1]["addr"]
+    p2addr = connectedUsers[player2]["addr"]
     # mutex
-    logFile.write(f"MATCHEND {player1} {player2} {winner}\n")
+    logFile.write(f"MATCHEND {p1addr} {player1} {p2addr} {player2} {winner}\n")
     logFile.flush()
     # persist
 
@@ -68,17 +71,18 @@ def handleGame(data, connectedUsers, s, address, connType, logFile, mux):
     p1conn = connectedUsers[player1]["conn"][0]
     p1connType = connectedUsers[player1]["conn"][1]
     p1addr = connectedUsers[player1]["addr"]
+
     p2conn = connectedUsers[player2]["conn"][0]
     p2connType = connectedUsers[player2]["conn"][1]
     p2addr = connectedUsers[player2]["addr"]
     connectedUsers[player1]["status"] = "Playing"
     connectedUsers[player2]["status"] = "Playing"
-    sendMessage("gameX", p1conn, p1addr, connType)
+    sendMessage(f"gameX{player2}", p1conn, p1addr, p1connType)
     # Só funciona se os dois usarem o mesmo tipo de conexão
-    sendMessage("gameO", p2conn, p2addr, connType)
+    sendMessage(f"gameO{player1}", p2conn, p2addr, p2connType)
     # persist log
     # mutex
-    logFile.write(f"MATCHSTART {player1} {player2}\n")
+    logFile.write(f"MATCHSTART {p1addr} {player1} {p2addr} {player2}\n")
     logFile.flush()
 
 
@@ -116,9 +120,12 @@ def handlePass(data, users, connectedUsers, addr, usersFile, mux):
 
 
 def handleLogin(data, users, connectedUsers, addr, s, connType, logFile, mux):
+    data = data.decode("ASCII")
     unameLen = int(data[4:7])
-    username = data[7:7+unameLen].decode('utf-8')
-    password = data[7+unameLen:].decode('utf-8')
+    username = data[7:7+unameLen]
+    passLen = int(data[7+unameLen:7+unameLen+3])
+    password = data[7+unameLen+3:7+unameLen+3+passLen]
+    playPort = int(data[7+unameLen+3+passLen:])
     print(
         f"LOGIN username length:{unameLen}\nusername:{username}\npassword:{password}")
     if not (username in users.keys()):
@@ -127,11 +134,11 @@ def handleLogin(data, users, connectedUsers, addr, s, connType, logFile, mux):
     if users[username][0] == password:
         print(f"user {username}: connected.")
         connectedUsers[username] = {"addr": addr, "conn": (
-            s, connType), "status": "Connected"}
+            s, connType), "status": "Connected", "port": playPort}
         # send(loginACK)
         # persist log
         # mutex
-        logFile.write(f"LOGIN {username}\n")
+        logFile.write(f"LOGIN {addr} {username}\n")
         logFile.flush()
     else:
         # send(loginNACK)
@@ -157,7 +164,7 @@ def handleLogout(data, users, connectedUsers, s, addr, logFile, mux):
             # persist log
             # mutex
             mux.acquire()
-            logFile.write(f"LOGOUT {username}\n")
+            logFile.write(f"LOGOUT {addr} {username}\n")
             logFile.flush()
             mux.release()
     else:
@@ -177,7 +184,10 @@ def handleCall(data, connectedUsers, s, address, connType):
     unameLen = int(data[4:7])
     username = data[7:7+unameLen].decode('ASCII')
     message = ""
-    addr = connectedUsers[username]["addr"]
+
+    port = connectedUsers[username]["port"]
+    addr = (address[0], port)
+    print("CALL address:", addr)
     if addr:
         message = packAddress(addr)
         sendMessage(message, s, address, connType)
@@ -271,17 +281,15 @@ def createList(data, connectedUsers):
 
 class ClientState():
     def __init__(self) -> None:
-        self.lasthearbeat = 0
+        self.lasthearbeat = time.time()
         self.conn = 0
-        self.lasthbACK = 0
+        self.lasthbACK = time.time()
         self.sendhb = 1
 
 
 def handleUDPClient(bytesAddressPair, s, udpUsers, user, connectedUsers,  recovery):
     data = bytesAddressPair[0]
     address = bytesAddressPair[1]
-
-    print(f"Connected by {address} using UDP.")
 
     if address in udpUsers.keys():
         cS = udpUsers[address]
@@ -295,6 +303,7 @@ def handleUDPClient(bytesAddressPair, s, udpUsers, user, connectedUsers,  recove
         recovery["log"].write(f"CONN {address} UDP\n")
         recovery["log"].flush()
         mux.release()
+        print(f"Connected by {address} using UDP.")
 
     handleCommand(data, s, address, users, connectedUsers, "udp", cS, recovery)
 
@@ -315,7 +324,6 @@ def handleTCPClient(conn, addr, users, connectedUsers, recovery):
         now = time.time()
         timediff = now - cS.lasthbACK
         if timediff >= 1:
-            print("Time+1")
             if cS.sendhb == 1:
                 sendMessage("HRTB", conn, addr, "tcp")
                 cS.lasthearbeat = time.time()
@@ -334,7 +342,6 @@ def handleTCPClient(conn, addr, users, connectedUsers, recovery):
         for x in inputready:
             if x.fileno() == conn.fileno():
                 data = recTCP(conn)
-                print(data)
                 if not data:
                     print(f"Client Disconnected: {addr}")
                     running = 0
@@ -348,7 +355,7 @@ def handleCommand(stream, s, address, users, connectedUsers, connType, cS: Clien
     stream.pop()
     for data in stream:
         comm = data[0:4]
-        print(comm)
+        print(data)
         if comm == b"newU":
             handleNew(data, users, connectedUsers,
                       recovery["users"], recovery["mux"])
@@ -381,17 +388,44 @@ def handleCommand(stream, s, address, users, connectedUsers, connType, cS: Clien
             print(f"not a command: {comm}")
 
 
+def sendHeartBeats(udpUsers, s):
+    print("SENDHEARTBEATS")
+    for addr, cS in udpUsers.items():
+        now = time.time()
+        timediff = now - cS.lasthbACK
+        if timediff >= 1:
+            if cS.sendhb == 1:
+                sendMessage("HRTB", s, addr, "udp")
+                cS.lasthearbeat = time.time()
+                cS.sendhb = 0
+            else:
+                if timediff > 30:
+                    print("Disconecting Client. No heartbeat response.")
+                    # rmove from udpusers
+                    running = 0
+                    break
+
+
 def listenUDP(host, port, bufferSize, users, connectedUsers, recovery):
     threadsUDP = []
     udpUsers = {}
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         s.bind((HOST, port))
+        inputs = [s]
         while(True):
-            bytesAddressPair = s.recvfrom(bufferSize)
-            t = Thread(target=handleUDPClient, args=(
-                bytesAddressPair, s, udpUsers, users, connectedUsers, recovery))
-            threadsUDP.append(t)
-            t.start()
+            try:
+                inputready, outputready, exceptready = select.select(
+                    inputs, [], [], 1)
+            except select.error as e:
+                print(e)
+            sendHeartBeats(udpUsers, s)
+            for x in inputready:
+                if x.fileno() == s.fileno():
+                    bytesAddressPair = s.recvfrom(bufferSize)
+                    t = Thread(target=handleUDPClient, args=(
+                        bytesAddressPair, s, udpUsers, users, connectedUsers, recovery))
+                    threadsUDP.append(t)
+                    t.start()
 
 
 def listenTCP(host, port, users, connectedUsers, recovery):

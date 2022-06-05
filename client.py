@@ -49,7 +49,7 @@ def callOpponent(data, server, addr, connType):
     port = int(data[1])
     print(f"HOST / PORT = {host} / {port}")
     opponent = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    opponent.connect((host, port+1))
+    opponent.connect((host, port))
     sendMessage("call", opponent, addr, "tcp")
     return opponent
 
@@ -80,7 +80,7 @@ def packTable(state):
 
 
 def packTACK():
-    return "tack"
+    return "tACK"
 
 
 def packPass(old, new, login):
@@ -91,10 +91,10 @@ def packPass(old, new, login):
     return message
 
 
-def packIn(user, password):
+def packIn(user, password, port):
     command = "in__"
     usernameLen = len(user)
-    message = f"{command}{usernameLen:03d}{user}{password}"
+    message = f"{command}{usernameLen:03d}{user}{len(password):03d}{password}{port}"
     return message
 
 
@@ -145,6 +145,7 @@ class Login():
     def startgame(self, marker):
         self.game = 1
         self.waiting = 0
+        self.request = 0
         if marker == "O":
             self.waiting = 1
         self.marker = marker
@@ -152,20 +153,18 @@ class Login():
     def endgame(self):
         self.game = 0
         self.waiting = 0
+        self.request = 0
         self.marker = "-"
         self.table = [0, 0, 0, 0, 0, 0, 0, 0, 0]
         self.cS = ClientState()
 
     def play(self, y, x, opponent):
-        print("Play start. Table:", self.table)
-        print("my marker: ", self.marker)
         marker = 1
         if self.marker == "O":
             marker = -1
         if opponent:
             marker *= -1
         self.table[3*y+x] = marker
-        print("Play End. Table:", self.table)
 
     def tableToStr(self):
         message = ""
@@ -195,7 +194,7 @@ class Login():
             direction[5] += self.table[3*i + 2]
             direction[6] += self.table[3*i + i]
             direction[5] += self.table[3*i + (2 - i)]
-        print(direction)
+
         for d in direction:
             if abs(d) == 3:
                 if d == 3:
@@ -216,10 +215,9 @@ def processOpponent(opponent, login: Login, inputs: list, s, addr: tuple, connTy
     stream.pop()
     if len(stream) == 0:
         stream = [b""]
-    print("STREAM = ", stream)
     for message in stream:
-        if (message != b"BEAT") and (message != b"BACK"):
-            print("RECIEVED: ", message.decode('ASCII'))
+        if (message != b"BEAT") and (message != b"BACK") and (message != b"tACK") and (message != b"pACK"):
+            print("\nRECIEVED MESSAGE: ", message.decode('ASCII'))
 
         if not message:
             inputs.remove(opponent)
@@ -233,7 +231,6 @@ def processOpponent(opponent, login: Login, inputs: list, s, addr: tuple, connTy
                 if login.state == 1:
                     print(
                         "NEW PLAY REQUEST. TYPE yes TO ACCEPT OR OTHER TO REFUSE.")
-                    print("JogoDaVelha >", end="")
                     login.request = 1
                 else:
                     pass
@@ -247,10 +244,8 @@ def processOpponent(opponent, login: Login, inputs: list, s, addr: tuple, connTy
                         "You need to execute login. Use in <usr> <pass>.")
             elif message[0:4] == b"play":
                 message = message.decode("ASCII")
-                print("message:", message)
                 x = int(message[4])
                 y = int(message[5])
-                print("x / y: ", x, " / ", y)
                 login.play(x, y, True)
                 sendMessage("pACK", opponent, addr, "tcp")
 
@@ -262,6 +257,9 @@ def processOpponent(opponent, login: Login, inputs: list, s, addr: tuple, connTy
                 # jogo não terminou
                 if len(message) == 13:
                     login.waiting = 0
+                    message = packTACK()
+                    sendMessage(message,
+                                opponent, addr, "tcp")
                 # jogo terminou. resultado na posição 20 da mensagem.
                 else:
                     winner = message[20]
@@ -274,10 +272,10 @@ def processOpponent(opponent, login: Login, inputs: list, s, addr: tuple, connTy
                     else:
                         print("FAILED TO PARSE RESULT")
                     printResult(result, login)
+                    inputs.remove(opponent)
+                    opponent.close()
+                    opponent = None
                     login.endgame()
-                message = packTACK()
-                sendMessage(message,
-                            opponent, addr, "tcp")
 
             elif message[0:4] == b"tACK":
                 pass
@@ -301,7 +299,11 @@ def processOpponent(opponent, login: Login, inputs: list, s, addr: tuple, connTy
             elif message == b"BACK":
                 login.cS.lasthbACK = time.time()
                 login.cS.sendhb = 1
-                login.cS.rtt = login.cS.lasthbACK - login.cS.lastheartbeat
+                login.cS.addRTT(login.cS.lasthbACK - login.cS.lastheartbeat)
+        if not ((message == b"BEAT") or (message == b"BACK") or (message == b"tACK")):
+            sys.stdout.flush()
+            print("JogoDaVelha >", end="")
+            sys.stdout.flush()
 
 
 def printResult(result, login):
@@ -355,17 +357,25 @@ class ClientState():
         self.conn = 0
         self.lasthbACK = 0
         self.sendhb = 1
+        self.rtt = []
+
+    def addRTT(self, rtt):
+        if len(self.rtt) == 3:
+            self.rtt = self.rtt[1:]
+        self.rtt.append(rtt)
 
 
 def runClient(addr, s, connType):
     name = s.getsockname()
     myHost = name[0]
     myPort = name[1]
-    print(f"my Host: {myHost} my Port: {myPort}")
+    print(f"Connected to server by Host: {myHost} my Port: {myPort}")
 
     listenConn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    listenConn.bind((myHost, myPort+1))
+    listenConn.bind((myHost, 0))
     listenConn.listen()
+    name = listenConn.getsockname()
+    playPort = name[1]
     inputs = [s, sys.stdin, listenConn]
     opponent = None
     running = 1
@@ -378,7 +388,6 @@ def runClient(addr, s, connType):
             now = time.time()
             timediff = now - login.cS.lasthbACK
             if timediff >= 1:
-                print("Time+1")
                 if login.cS.sendhb == 1:
                     sendMessage("BEAT", opponent, addr, "tcp")
                     login.cS.lastheartbeat = time.time()
@@ -394,6 +403,7 @@ def runClient(addr, s, connType):
                         print("ACCEPTED CALL")
                         sendMessage("callACK", opponent, addr, "tcp")
                         comm = None
+                        login.request == 0
                     else:
                         login.request == 0
                 if comm:
@@ -411,7 +421,7 @@ def runClient(addr, s, connType):
                             else:
                                 # alterar para inAck
                                 login.login(comm[1], comm[2])
-                                message = packIn(comm[1], comm[2])
+                                message = packIn(comm[1], comm[2], playPort)
                                 sendMessage(
                                     message, s, addr, connType)
                         elif comm[0] == "list":
@@ -482,7 +492,9 @@ def runClient(addr, s, connType):
                                         int(comm[1]), int(comm[2]), False)
                                     sendMessage(
                                         message, opponent, addr, "tcp")
-
+                                    table = login.tableToStr()
+                                    for i in range(3):
+                                        print(table[(i*3):(i*3)+3])
                                     login.waiting = 1
                             elif comm[0] == "over":
                                 if login.marker == "X":
@@ -497,8 +509,9 @@ def runClient(addr, s, connType):
                                 printResult(result, login)
                                 login.endgame()
                             elif comm[0] == "delay":
-                                print(f"{login.cS.rtt}")
-
+                                for rtt in login.cS.rtt:
+                                    print(f"{rtt}")
+                    sys.stdout.flush()
                     print("JogoDaVelha >", end="")
                     sys.stdout.flush()
 
@@ -508,7 +521,7 @@ def runClient(addr, s, connType):
 
             # Trata de leituras no socket que escuta requesições de partidas.
             elif x.fileno() == listenConn.fileno():
-                opponent, addr = listenConn.accept()
+                opponent, addressDummy = listenConn.accept()
                 inputs.append(opponent)
 
             elif (opponent and x.fileno() == opponent.fileno()):
@@ -518,21 +531,26 @@ def runClient(addr, s, connType):
 def processServer(login, s, addr, connType):
     stream = s.recv(1024).split(b"\n")
     stream.pop()
-
+    # adicionar fim de conexão
     for message in stream:
         # print(message.decode('ASCII'))
         comm = message[0:4]
         if comm[0:4] == b"game":
             message = message.decode("ASCII")
             print(f"Starting Game. You are {message[4]}.")
+            login.opponent = message[5:]
+            sys.stdout.flush()
+            print("JogoDaVelha >", end="")
+            sys.stdout.flush()
             login.startgame(message[4])
-            print(message)
+
         elif comm[0:4] == b"HRTB":
             sendMessage("HACK", s, addr, connType)
         else:
             print(message.decode('ASCII'))
             sys.stdout.flush()
             print("JogoDaVelha >", end="")
+            sys.stdout.flush()
 
 
 if len(sys.argv) == 4:
