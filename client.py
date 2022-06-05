@@ -35,6 +35,8 @@ def recMessage(s, connType):
 
 
 def sendMessage(message, s, address, connType):
+    message += "\n"
+    message = bytes(message, encoding="ASCII")
     if connType == "tcp":
         sendTCP(message, s)
     else:
@@ -48,7 +50,7 @@ def callOpponent(data, server, addr, connType):
     print(f"HOST / PORT = {host} / {port}")
     opponent = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     opponent.connect((host, port+1))
-    sendMessage(b"call", opponent, addr, "tcp")
+    sendMessage("call", opponent, addr, "tcp")
     return opponent
 
 
@@ -210,91 +212,96 @@ class Login():
 
 
 def processOpponent(opponent, login: Login, inputs: list, s, addr: tuple, connType):
-    message = opponent.recv(1024)
-    if not message:
-        inputs.remove(opponent)
-        opponent.close()
-        opponent = None
-        print("Opponent closed connection.")
-        login.endgame()
-    else:
-        # message = message.decode('ASCII')
+    stream = opponent.recv(1024).split(b"\n")
+    stream.pop()
+    if len(stream) == 0:
+        stream = [b""]
+    print("STREAM = ", stream)
+    for message in stream:
+        if (message != b"BEAT") and (message != b"BACK"):
+            print("RECIEVED: ", message.decode('ASCII'))
 
-        if message == b"call":
-            if login.state == 1:
-                print(
-                    "NEW PLAY REQUEST. TYPE yes TO ACCEPT OR OTHER TO REFUSE.")
-                print("JogoDaVelha >", end="")
-                login.request = 1
-            else:
-                pass
-        elif message == b"callACK":
-            if login.state == 1:
-                message = packGame(login.name, login.opponent)
-                sendMessage(bytes(message, encoding="ASCII"),
-                            s, addr, connType)
-            else:
-                print(
-                    "You need to execute login. Use in <usr> <pass>.")
-        elif message[0:4] == b"play":
-            message = message.decode("ASCII")
-            print("message:", message)
-            x = int(message[4])
-            y = int(message[5])
-            print("x / y: ", x, " / ", y)
-            login.play(x, y, True)
-            sendMessage(b"pACK", opponent, addr, "tcp")
-
-        elif message[0:4] == b"tabl":
-            message = message.decode("ASCII")
-            print(message[4:7])
-            print(message[7:10])
-            print(message[10:13])
-            # jogo não terminou
-            if len(message) == 13:
-                login.waiting = 0
-            # jogo terminou. resultado na posição 20 da mensagem.
-            else:
-                winner = message[20]
-                if winner == "D":
-                    result = 0
-                elif winner == "X":
-                    result = 1
-                elif winner == "O":
-                    result = -1
+        if not message:
+            inputs.remove(opponent)
+            opponent.close()
+            opponent = None
+            print("Opponent closed connection.")
+            login.endgame()
+        else:
+            # message = message.decode('ASCII')
+            if message == b"call":
+                if login.state == 1:
+                    print(
+                        "NEW PLAY REQUEST. TYPE yes TO ACCEPT OR OTHER TO REFUSE.")
+                    print("JogoDaVelha >", end="")
+                    login.request = 1
                 else:
-                    print("FAILED TO PARSE RESULT")
-                printResult(result, login)
-                login.endgame()
-            message = packTACK()
-            sendMessage(bytes(message, encoding="ASCII"),
-                        opponent, addr, "tcp")
+                    pass
+            elif message == b"callACK":
+                if login.state == 1:
+                    message = packGame(login.name, login.opponent)
+                    sendMessage(message,
+                                s, addr, connType)
+                else:
+                    print(
+                        "You need to execute login. Use in <usr> <pass>.")
+            elif message[0:4] == b"play":
+                message = message.decode("ASCII")
+                print("message:", message)
+                x = int(message[4])
+                y = int(message[5])
+                print("x / y: ", x, " / ", y)
+                login.play(x, y, True)
+                sendMessage("pACK", opponent, addr, "tcp")
 
-        elif message[0:4] == b"tACK":
-            pass
-        elif message[0:4] == b"pACK":
-            message = packTable(login)
-            result = login.checkEnd()
-            if result:
-                message += packEnd(result)
-                sendMessage(bytes(message, encoding="ASCII"),
+            elif message[0:4] == b"tabl":
+                message = message.decode("ASCII")
+                print(message[4:7])
+                print(message[7:10])
+                print(message[10:13])
+                # jogo não terminou
+                if len(message) == 13:
+                    login.waiting = 0
+                # jogo terminou. resultado na posição 20 da mensagem.
+                else:
+                    winner = message[20]
+                    if winner == "D":
+                        result = 0
+                    elif winner == "X":
+                        result = 1
+                    elif winner == "O":
+                        result = -1
+                    else:
+                        print("FAILED TO PARSE RESULT")
+                    printResult(result, login)
+                    login.endgame()
+                message = packTACK()
+                sendMessage(message,
                             opponent, addr, "tcp")
-                message = packResult(result, login)
-                sendMessage(bytes(message, encoding="ASCII"),
-                            s, addr, connType)
-                printResult(result, login)
-                login.endgame()
-            else:
-                sendMessage(bytes(message, encoding="ASCII"),
-                            opponent, addr, "tcp")
-        elif message == b"BEAT":
-            opponent.sendall(b"BACK")
-        elif message == b"BACK":
-            login.cS.lasthbACK = time.time()
-            login.cS.sendhb = 1
-            login.cS.rtt = login.cS.lastbACK - login.cS.lastheartbeat
 
-        print("RECIEVED: ", message.decode('ASCII'))
+            elif message[0:4] == b"tACK":
+                pass
+            elif message[0:4] == b"pACK":
+                message = packTable(login)
+                result = login.checkEnd()
+                if result:
+                    message += packEnd(result)
+                    sendMessage(message,
+                                opponent, addr, "tcp")
+                    message = packResult(result, login)
+                    sendMessage(message,
+                                s, addr, connType)
+                    printResult(result, login)
+                    login.endgame()
+                else:
+                    sendMessage(message,
+                                opponent, addr, "tcp")
+            elif message == b"BEAT":
+                sendMessage("BACK", opponent, addr, "tcp")
+            elif message == b"BACK":
+                login.cS.lasthbACK = time.time()
+                login.cS.sendhb = 1
+                login.cS.rtt = login.cS.lasthbACK - login.cS.lastheartbeat
 
 
 def printResult(result, login):
@@ -344,7 +351,7 @@ def packEnd(result):
 
 class ClientState():
     def __init__(self) -> None:
-        self.lasthearbeat = 0
+        self.lastheartbeat = 0
         self.conn = 0
         self.lasthbACK = 0
         self.sendhb = 1
@@ -373,8 +380,8 @@ def runClient(addr, s, connType):
             if timediff >= 1:
                 print("Time+1")
                 if login.cS.sendhb == 1:
-                    opponent.sendall(b"BEAT")
-                    login.cS.lasthearbeat = time.time()
+                    sendMessage("BEAT", opponent, addr, "tcp")
+                    login.cS.lastheartbeat = time.time()
                     login.cS.sendhb = 0
 
         inputready, outputready, exceptready = select.select(
@@ -385,7 +392,7 @@ def runClient(addr, s, connType):
                 if login.request == 1:
                     if comm[0] == "yes":
                         print("ACCEPTED CALL")
-                        sendMessage(b"callACK", opponent, addr, "tcp")
+                        sendMessage("callACK", opponent, addr, "tcp")
                         comm = None
                     else:
                         login.request == 0
@@ -397,7 +404,7 @@ def runClient(addr, s, connType):
                             else:
                                 message = packNew(comm[1], comm[2])
                                 sendMessage(
-                                    bytes(message, encoding="ASCII"), s, addr, connType)
+                                    message, s, addr, connType)
                         elif comm[0] == "in":
                             if len(comm) != 3:
                                 print("uso: in <usuario> <senha>")
@@ -406,17 +413,16 @@ def runClient(addr, s, connType):
                                 login.login(comm[1], comm[2])
                                 message = packIn(comm[1], comm[2])
                                 sendMessage(
-                                    bytes(message, encoding="ASCII"), s, addr, connType)
+                                    message, s, addr, connType)
                         elif comm[0] == "list":
                             message = packList()
-                            message = str.encode(message)
                             sendMessage(message, s, addr, connType)
                         #  message = s.recv(1024)
                         # print(message.decode('utf-8'))
                         elif comm[0] == "hall":
                             message = packHall()
                             sendMessage(
-                                bytes(message, encoding="ASCII"), s, addr, connType)
+                                message, s, addr, connType)
                             # message = s.recv(1024)
 
                         elif comm[0] == "out":
@@ -424,7 +430,7 @@ def runClient(addr, s, connType):
                                 login.logout
                                 message = packOut(login)
                                 sendMessage(
-                                    bytes(message, encoding="ASCII"), s, addr, connType)
+                                    message, s, addr, connType)
                             else:
                                 print(
                                     "You need to execute login. Use in <usr> <pass>.")
@@ -437,7 +443,7 @@ def runClient(addr, s, connType):
                                         comm[1], comm[2], login)
                                     login.password = comm[2]
                                     sendMessage(
-                                        bytes(message, encoding="ASCII"), s, addr, connType)
+                                        message, s, addr, connType)
                                 else:
                                     print(
                                         "You need to execute login. Use in <usr> <pass>.")
@@ -448,9 +454,10 @@ def runClient(addr, s, connType):
                                 if len(comm) != 2:
                                     print("uso: call <oponent>")
                                 else:
+                                    # mudar isso pode dar problema. melhor é mudar o estado para esperar receber e depois mandar
                                     message = packCall(comm[1], login)
                                     sendMessage(
-                                        bytes(message, encoding="ASCII"), s, addr, connType)
+                                        message, s, addr, connType)
                                     message = s.recv(1024)
                                     opponent = callOpponent(
                                         message, s, addr, connType)
@@ -474,7 +481,7 @@ def runClient(addr, s, connType):
                                     login.play(
                                         int(comm[1]), int(comm[2]), False)
                                     sendMessage(
-                                        bytes(message, encoding="ASCII"), opponent, addr, "tcp")
+                                        message, opponent, addr, "tcp")
 
                                     login.waiting = 1
                             elif comm[0] == "over":
@@ -484,11 +491,9 @@ def runClient(addr, s, connType):
                                     result = 1
                                 message = packTable(login)
                                 message += packEnd(result)
-                                sendMessage(
-                                    bytes(message, encoding="ASCII"), opponent, addr, "tcp")
+                                sendMessage(message, opponent, addr, "tcp")
                                 message = packResult(result, login)
-                                sendMessage(
-                                    bytes(message, encoding="ASCII"), s, addr, connType)
+                                sendMessage(message, s, addr, connType)
                                 printResult(result, login)
                                 login.endgame()
                             elif comm[0] == "delay":
@@ -511,21 +516,23 @@ def runClient(addr, s, connType):
 
 
 def processServer(login, s, addr, connType):
-    message = s.recv(1024)
+    stream = s.recv(1024).split(b"\n")
+    stream.pop()
 
-    # print(message.decode('ASCII'))
-    comm = message[0:4]
-    if comm[0:4] == b"game":
-        message = message.decode("ASCII")
-        print(f"Starting Game. You are {message[4]}.")
-        login.startgame(message[4])
-        print(message)
-    elif comm[0:4] == b"HRTB":
-        sendMessage(b"HACK", s, addr, connType)
-    else:
-        print(message.decode('ASCII'))
-        sys.stdout.flush()
-        print("JogoDaVelha >", end="")
+    for message in stream:
+        # print(message.decode('ASCII'))
+        comm = message[0:4]
+        if comm[0:4] == b"game":
+            message = message.decode("ASCII")
+            print(f"Starting Game. You are {message[4]}.")
+            login.startgame(message[4])
+            print(message)
+        elif comm[0:4] == b"HRTB":
+            sendMessage("HACK", s, addr, connType)
+        else:
+            print(message.decode('ASCII'))
+            sys.stdout.flush()
+            print("JogoDaVelha >", end="")
 
 
 if len(sys.argv) == 4:

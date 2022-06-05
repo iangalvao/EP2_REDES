@@ -9,7 +9,7 @@ PORT = 65432  # Port to listen on (non-privileged ports are > 1023)
 BUFFERSIZE = 1024
 
 
-def handleNew(data, users, connectedUsers, usersFile):
+def handleNew(data, users, connectedUsers, usersFile, mux):
     unameLen = int(data[4:7])
     username = data[7:7+unameLen].decode('utf-8')
     password = data[7+unameLen:].decode('utf-8')
@@ -36,7 +36,7 @@ def unpackEndGame(data):
     return (player1, player2, res)
 
 
-def handleEndGame(data, users, connectedUsers, s, address, connType, pointsFile, logFile):
+def handleEndGame(data, users, connectedUsers, s, address, connType, pointsFile, logFile, mux):
     player1, player2, result = unpackEndGame(data)
     if result == 1:
         users[player1][1] += 1
@@ -59,7 +59,7 @@ def handleEndGame(data, users, connectedUsers, s, address, connType, pointsFile,
     # persist
 
 
-def handleGame(data, connectedUsers, s, address, connType, logFile):
+def handleGame(data, connectedUsers, s, address, connType, logFile, mux):
     unameLen = int(data[4:7])
     player1 = data[7:7+unameLen].decode('ASCII')
     player2 = data[7+unameLen:].decode('ASCII')
@@ -71,10 +71,11 @@ def handleGame(data, connectedUsers, s, address, connType, logFile):
     p2conn = connectedUsers[player2]["conn"][0]
     p2connType = connectedUsers[player2]["conn"][1]
     p2addr = connectedUsers[player2]["addr"]
-
-    sendMessage(b"gameX", p1conn, p1addr, connType)
+    connectedUsers[player1]["status"] = "Playing"
+    connectedUsers[player2]["status"] = "Playing"
+    sendMessage("gameX", p1conn, p1addr, connType)
     # Só funciona se os dois usarem o mesmo tipo de conexão
-    sendMessage(b"gameO", p2conn, p2addr, connType)
+    sendMessage("gameO", p2conn, p2addr, connType)
     # persist log
     # mutex
     logFile.write(f"MATCHSTART {player1} {player2}\n")
@@ -94,7 +95,7 @@ def unpackPass(data):
     return (oldPass, newPass, usr)
 
 
-def handlePass(data, users, connectedUsers, addr, usersFile):
+def handlePass(data, users, connectedUsers, addr, usersFile, mux):
     oldPass, newPass, username = unpackPass(data)
 
     if username not in connectedUsers.keys():
@@ -103,7 +104,10 @@ def handlePass(data, users, connectedUsers, addr, usersFile):
     if oldPass == users[username][0]:
         users[username][0] = newPass
         # mutex
+        mux.acquire()
         usersFile.write(f"{username} {newPass}\n")
+        usersFile.flush()
+        mux.release()
     else:
         print(
             f"Password Change Attempt Failed. User:{username}, password:{oldPass}")
@@ -111,7 +115,7 @@ def handlePass(data, users, connectedUsers, addr, usersFile):
     # send(newACK)
 
 
-def handleLogin(data, users, connectedUsers, addr, s, connType, logFile):
+def handleLogin(data, users, connectedUsers, addr, s, connType, logFile, mux):
     unameLen = int(data[4:7])
     username = data[7:7+unameLen].decode('utf-8')
     password = data[7+unameLen:].decode('utf-8')
@@ -122,7 +126,8 @@ def handleLogin(data, users, connectedUsers, addr, s, connType, logFile):
         return
     if users[username][0] == password:
         print(f"user {username}: connected.")
-        connectedUsers[username] = {"addr": addr, "conn": (s, connType)}
+        connectedUsers[username] = {"addr": addr, "conn": (
+            s, connType), "status": "Connected"}
         # send(loginACK)
         # persist log
         # mutex
@@ -163,9 +168,8 @@ def handleLogout(data, users, connectedUsers, s, addr, logFile, mux):
 
 def handleList(data, connectedUsers, s, address, connType):
     message = createList(data, connectedUsers)
-    message = str.encode(message)
     if not message:
-        message = b"There are no users connected."
+        message = "There are no users connected."
     sendMessage(message, s, address, connType)
 
 
@@ -178,7 +182,7 @@ def handleCall(data, connectedUsers, s, address, connType):
         message = packAddress(addr)
         sendMessage(message, s, address, connType)
     else:
-        sendMessage(b"NACK", s, address, connType)
+        sendMessage("NACK", s, address, connType)
 
 
 def packAddress(addr):
@@ -188,15 +192,14 @@ def packAddress(addr):
     message += " "
     message += f"{addr[1]}"
     print(message)
-    message = bytes(message, encoding="ASCII")
+    message = message
     return message
 
 
 def handleHoF(data, users, s, addr, connType):
     message = createHoF(data, users)
-    message = str.encode(message)
     if not message:
-        message = b"There are no users in the system."
+        message = "There are no users in the system."
     sendMessage(message, s, addr, connType)
 
 
@@ -227,6 +230,7 @@ def recMessage(s, connType):
 
 def sendMessage(message, s, address, connType):
     message += "\n"
+    message = bytes(message, encoding="ASCII")
     if connType == "tcp":
         sendTCP(message, s)
     else:
@@ -260,7 +264,7 @@ def createList(data, connectedUsers):
     for user, attrs in connectedUsers.items():
         message += f"{len(user):03d}"
         message += user
-        message += "Connected"
+        message += attrs["status"]
         message += '\n'
     return message
 
@@ -313,7 +317,7 @@ def handleTCPClient(conn, addr, users, connectedUsers, recovery):
         if timediff >= 1:
             print("Time+1")
             if cS.sendhb == 1:
-                conn.sendall(b"HRTB")
+                sendMessage("HRTB", conn, addr, "tcp")
                 cS.lasthearbeat = time.time()
                 cS.sendhb = 0
             else:
@@ -340,15 +344,17 @@ def handleTCPClient(conn, addr, users, connectedUsers, recovery):
 
 
 def handleCommand(stream, s, address, users, connectedUsers, connType, cS: ClientState, recovery):
-    stream = stream.split("\n")
+    stream = stream.split(b"\n")
+    stream.pop()
     for data in stream:
         comm = data[0:4]
         print(comm)
         if comm == b"newU":
-            handleNew(data, users, connectedUsers, recovery["users"])
+            handleNew(data, users, connectedUsers,
+                      recovery["users"], recovery["mux"])
         elif comm == b"in__":
             handleLogin(data, users, connectedUsers, address,
-                        s, connType, recovery["log"])
+                        s, connType, recovery["log"], recovery["mux"])
         elif comm == b"list":
             handleList(data, connectedUsers, s, address, connType)
         elif comm == b"hall":
@@ -356,17 +362,18 @@ def handleCommand(stream, s, address, users, connectedUsers, connType, cS: Clien
         elif comm == b"out_":
             print("starting logout")
             handleLogout(data, users, connectedUsers,
-                         s, address, recovery["log"])
+                         s, address, recovery["log"], recovery["mux"])
         elif comm == b"pass":
-            handlePass(data, users, connectedUsers, address, recovery["users"])
+            handlePass(data, users, connectedUsers, address,
+                       recovery["users"], recovery["mux"])
         elif comm == b"call":
             handleCall(data, connectedUsers, s, address, connType)
         elif comm == b"game":
             handleGame(data, connectedUsers, s, address,
-                       connType, recovery["log"])
+                       connType, recovery["log"], recovery["mux"])
         elif comm == b"endG":
             handleEndGame(data, users, connectedUsers, s,
-                          address, connType, recovery["points"], recovery["log"])
+                          address, connType, recovery["points"], recovery["log"], recovery["mux"])
         elif comm == b"HACK":
             cS.lasthbACK = time.time()
             cS.sendhb = 1
